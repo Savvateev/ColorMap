@@ -101,6 +101,24 @@ final class CSVViewModel: ObservableObject {
     }
 
     func loadCSV(from url: URL) async {
+        print("DEBUG: loadCSV начался")
+        isLoading = true
+        fileError = nil
+        apiWarning = nil
+        houses = []
+        defer {
+            isLoading = false
+        }
+        do {
+            records = try CSVReader.read(from: url)
+            sourceFileName = url.lastPathComponent
+            print("DEBUG: прочитано записей: \(records.count)")
+            print("DEBUG: обычных абонентов: \(ordinarySubscriberCount(in: records))")
+        } catch {
+            print("DEBUG: ошибка чтения CSV: \(error.localizedDescription)")
+            fileError = error.localizedDescription
+            return
+        }
         isLoading = true
         fileError = nil
         apiWarning = nil

@@ -121,6 +121,16 @@ struct ContentView: View {
                 didAttemptLoad = true
                 await viewModel.loadCSV(from: csvURL)
             }
+            .task {
+                print("DEBUG: ContentView .task запущен")
+                guard !didAttemptLoad else {
+                    print("DEBUG: загрузка пропущена — didAttemptLoad уже true")
+                    return
+                }
+                didAttemptLoad = true
+                print("DEBUG: вызываю loadCSV для \(csvURL.path)")
+                await viewModel.loadCSV(from: csvURL)
+            }
         }
     }
 }

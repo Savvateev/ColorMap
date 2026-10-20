@@ -37,7 +37,8 @@ enum CSVReader {
             text.removeFirst()
         }
 
-        // Нормализуем CRLF и CR до LF перед разбором CSV.
+        // Сначала приводим окончания строк CRLF и CR к LF.
+        // Это важно для корректного разбиения CSV на строки.
         text = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -53,8 +54,8 @@ enum CSVReader {
             throw CSVReaderError.emptyFile
         }
 
-        // Убираем точки и пробелы из заголовка, чтобы, например,
-        // «нас. пункт» распознавался как «наспункт».
+        // Нормализуем заголовки: «нас. пункт», «нас.пункт» и «нас пункт»
+        // будут распознаны как один и тот же столбец.
         var columnIndexes: [String: Int] = [:]
 
         for (index, name) in rows[headerIndex].enumerated() {
@@ -76,20 +77,14 @@ enum CSVReader {
             .filter { columnIndexes[$0.key] == nil }
             .map(\.displayName)
 
-        guard missingColumns.isEmpty else {
-            throw CSVReaderError.missingColumns(missingColumns)
-        }
-
-        guard
-            let statusIndex = columnIndexes["статус"],
-            let settlementIndex = columnIndexes["наспункт"],
-            let streetIndex = columnIndexes["улица"],
-            let houseIndex = columnIndexes["дом"],
-            let apartmentIndex = columnIndexes["квартира"]
+        guard missingColumns.isEmpty,
+              let statusIndex = columnIndexes["статус"],
+              let settlementIndex = columnIndexes["наспункт"],
+              let streetIndex = columnIndexes["улица"],
+              let houseIndex = columnIndexes["дом"],
+              let apartmentIndex = columnIndexes["квартира"]
         else {
-            throw CSVReaderError.missingColumns(
-                requiredColumns.map(\.displayName)
-            )
+            throw CSVReaderError.missingColumns(missingColumns)
         }
 
         let requiredIndexes = [
@@ -104,15 +99,15 @@ enum CSVReader {
         var records: [StatusRecord] = []
 
         for row in rows.dropFirst(headerIndex + 1) {
-            // Пропускаем полностью пустые строки.
             let isBlank = row.allSatisfy {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
+
             if isBlank {
                 continue
             }
 
-            // Пропускаем строки, в которых отсутствует один из нужных столбцов.
+            // Пропускаем строки, в которых не хватает нужных столбцов.
             guard row.count > lastRequiredIndex else {
                 continue
             }
@@ -139,7 +134,7 @@ enum CSVReader {
             )
         }
 
-        // Диагностика без вывода самих адресов в Debug Console.
+        // Диагностика без вывода адресов и персональных данных.
         print("CSV: разобрано записей — \(records.count)")
 
         return records
@@ -156,18 +151,15 @@ enum CSVReader {
             .filter { !$0.isWhitespace && $0 != "." }
     }
 
+    /// Удаляет содержимое круглых скобок вместе со скобками.
+    /// Повторение цикла позволяет обработать и вложенные скобки.
     private static func normalizeStreet(
         _ street: String,
         settlement: String
     ) -> String {
-        let compactSettlement = settlement
-            .filter { !$0.isWhitespace }
-            .lowercased()
-
-        guard compactSettlement.contains("п.тайтурка") else {
+        guard settlement.localizedCaseInsensitiveContains("Тайтурка") else {
             return street
         }
-
         return street
             .replacingOccurrences(
                 of: #"\s*\(\s*Тай-ка\s*\)"#,
@@ -194,7 +186,7 @@ enum CSVReader {
 
             if inQuotes {
                 if character == "\"" {
-                    // Две кавычки подряд внутри значения обозначают одну кавычку.
+                    // Две кавычки подряд внутри поля означают одну кавычку.
                     if index + 1 < characters.count,
                        characters[index + 1] == "\"" {
                         field.append("\"")
@@ -204,7 +196,7 @@ enum CSVReader {
 
                     inQuotes = false
                 } else {
-                    // Переводы строк внутри кавычек остаются частью поля.
+                    // Перенос строки внутри кавычек остаётся частью поля.
                     field.append(character)
                 }
             } else if character == "\"" && field.isEmpty {
