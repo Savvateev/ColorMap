@@ -114,12 +114,8 @@ enum CSVReader {
 
             let status = cleaned(row[statusIndex])
             let settlement = cleaned(row[settlementIndex])
-            let street = normalizeStreet(
-                cleaned(row[streetIndex]),
-                settlement: settlement
-            )
+            let street = normalizeStreet(cleaned(row[streetIndex]))
             let house = cleaned(row[houseIndex])
-
             let rawApartment = cleaned(row[apartmentIndex])
             let apartment = rawApartment.isEmpty ? "0" : rawApartment
 
@@ -153,21 +149,16 @@ enum CSVReader {
 
     /// Удаляет содержимое круглых скобок вместе со скобками.
     /// Повторение цикла позволяет обработать и вложенные скобки.
-    private static func normalizeStreet(
-        _ street: String,
-        settlement: String
-    ) -> String {
-        guard settlement.localizedCaseInsensitiveContains("Тайтурка") else {
-            return street
-        }
-        return street
+    private static func normalizeStreet(_ street: String) -> String {
+        street
             .replacingOccurrences(
-                of: #"\s*\(\s*Тай-ка\s*\)"#,
+                of: #"\s*\(\s*(?:Тай-ка|Чер)\s*\)"#,
                 with: "",
                 options: [.regularExpression, .caseInsensitive]
             )
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
 
     private static func parse(
         _ text: String,
