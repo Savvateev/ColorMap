@@ -13,6 +13,27 @@ struct ContentView: View {
     )
 
     var body: some View {
+        TabView {
+            mapTab
+                .tabItem {
+                    Label("Карта", systemImage: "map")
+                }
+
+            NavigationStack {
+                SettingsView {
+                    viewModel.reloadAPISettings()
+                    Task {
+                        await viewModel.loadCSV(from: csvURL)
+                    }
+                }
+            }
+            .tabItem {
+                Label("Настройки", systemImage: "gearshape")
+            }
+        }
+    }
+
+    private var mapTab: some View {
         NavigationStack {
             List {
                 Section("Карта") {
@@ -28,7 +49,11 @@ struct ContentView: View {
                     } label: {
                         Label("Создать и экспортировать KML", systemImage: "map")
                     }
-                    .disabled(viewModel.isLoading || viewModel.isGeneratingKML || viewModel.records.isEmpty)
+                    .disabled(
+                        viewModel.isLoading ||
+                        viewModel.isGeneratingKML ||
+                        viewModel.records.isEmpty
+                    )
 
                     if viewModel.isGeneratingKML {
                         ProgressView("Получаем координаты Яндекс Геокодером…")

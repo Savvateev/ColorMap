@@ -57,10 +57,15 @@ final class DadataService {
         !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    init() {
-        // Configure credentials in Xcode Scheme > Run > Environment Variables.
-        token = ProcessInfo.processInfo.environment["DADATA_API_KEY"] ?? ""
-        secret = ProcessInfo.processInfo.environment["DADATA_SECRET_KEY"] ?? ""
+    init(token: String? = nil, secret: String? = nil) {
+        let environment = ProcessInfo.processInfo.environment
+        let savedToken = APIKeyStore.load(.dadata)
+        let savedSecret = APIKeyStore.load(.dadataSecret)
+
+        self.token = token
+            ?? (savedToken.isEmpty ? (environment["DADATA_API_KEY"] ?? "") : savedToken)
+        self.secret = secret
+            ?? (savedSecret.isEmpty ? (environment["DADATA_SECRET_KEY"] ?? "") : savedSecret)
 
         if let data = UserDefaults.standard.data(forKey: Self.cacheKey),
            let savedCache = try? JSONDecoder().decode(
@@ -180,7 +185,7 @@ private enum DadataError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingCredentials:
-            return "Укажите API-ключ и секретный ключ DaData в DadataHouseLookup.swift."
+            return "Укажите API-ключ и секретный ключ DaData во вкладке «Настройки»."
 
         case .invalidResponse:
             return "DaData вернула некорректный ответ."

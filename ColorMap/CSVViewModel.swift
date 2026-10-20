@@ -13,8 +13,8 @@ final class CSVViewModel: ObservableObject {
     @Published private(set) var addressErrors: [String] = []
     @Published private(set) var mapErrors: [String] = []
 
-    private let dadataService = DadataService()
-    private let yandexGeocodingService = YandexGeocodingService()
+    private var dadataService = DadataService()
+    private var yandexGeocodingService = YandexGeocodingService()
     private var houseIDByAddressKey: [String: String] = [:]
 
     /// All buildings DaData identified as apartment buildings.
@@ -63,6 +63,11 @@ final class CSVViewModel: ObservableObject {
             .map { $0.map(escapeCSVField).joined(separator: ";") }
             .joined(separator: "\r\n")
         return "\u{FEFF}" + csvText
+    }
+
+    func reloadAPISettings() {
+        dadataService = DadataService()
+        yandexGeocodingService = YandexGeocodingService()
     }
 
     func loadCSV(from url: URL) async {
@@ -183,7 +188,7 @@ final class CSVViewModel: ObservableObject {
             return nil
         }
         guard yandexGeocodingService.isConfigured else {
-            mapErrors = ["Не задан ключ YANDEX_GEOCODER_API_KEY. Добавьте его в переменные среды схемы запуска Xcode."]
+            mapErrors = ["Не задан ключ YANDEX_GEOCODER_API_KEY. Добавьте его во вкладке «Настройки»."]
             return nil
         }
 

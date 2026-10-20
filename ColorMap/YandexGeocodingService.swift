@@ -60,8 +60,12 @@ final class YandexGeocodingService {
         !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    init(apiKey: String = ProcessInfo.processInfo.environment["YANDEX_GEOCODER_API_KEY"] ?? "") {
+    init(apiKey: String? = nil) {
+        let savedKey = APIKeyStore.load(.yandexGeocoder)
         self.apiKey = apiKey
+            ?? (savedKey.isEmpty
+                ? (ProcessInfo.processInfo.environment["YANDEX_GEOCODER_API_KEY"] ?? "")
+                : savedKey)
     }
 
     func coordinate(for address: String) async throws -> GeocodedCoordinate {
@@ -152,7 +156,7 @@ private enum YandexGeocodingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "Не задан ключ YANDEX_GEOCODER_API_KEY. Добавьте его в переменные среды схемы запуска Xcode."
+            return "Не задан ключ YANDEX_GEOCODER_API_KEY. Добавьте его во вкладке «Настройки»."
         case .invalidURL:
             return "Не удалось сформировать запрос к Яндекс Геокодеру."
         case .invalidResponse:
