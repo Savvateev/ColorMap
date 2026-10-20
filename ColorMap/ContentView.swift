@@ -1,8 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
 
 struct ContentView: View {
     @StateObject private var viewModel = CSVViewModel()
     @State private var didAttemptLoad = false
+    @State private var isExportingCSV = false
+    @State private var exportDocument = CSVExportDocument()
+    @State private var exportError: String?
 
     private let csvURL = URL(
         fileURLWithPath: "/Users/pavelsavvateev/Downloads/taiturka.csv"
@@ -11,15 +16,21 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             List {
+                Button {
+                    exportDocument = CSVExportDocument(text: viewModel.apartmentBuildingsCSV)
+                    isExportingCSV = true
+                } label: {
+                    Label("Экспорт МКД", systemImage: "square.and.arrow.down")
+                }
+                .disabled(viewModel.isLoading || viewModel.apartmentBuildings.isEmpty)
+
                 Section("Результат") {
                     Text("Файл: \(viewModel.sourceFileName ?? csvURL.lastPathComponent)")
                     Text("Абонентских записей: \(viewModel.records.count)")
                     Text("Многоквартирных домов: \(viewModel.apartmentBuildings.count)")
                     Text("Жилых домов: \(viewModel.residentialHouseCount)")
-                    Text(
-                        "МКД с низким проникновением (менее 1/3): " +
-                        "\(viewModel.apartmentBuildings.count)"
-                    )
+                    //Text("МКД с низким проникновением (менее 1/3): " +
+                    //"\(viewModel.apartmentBuildings.count)")
                 }
 
                 if viewModel.isLoading {
@@ -76,6 +87,34 @@ struct ContentView: View {
                     }
                 }
             }
+            .fileExporter(
+                isPresented: $isExportingCSV,
+                document: exportDocument,
+                contentType: .commaSeparatedText,
+                defaultFilename: "taiturka_mkd"
+            ) { result in
+                if case .failure(let error) = result {
+                    exportError = error.localizedDescription
+                }
+            }
+            .alert(
+                "Ошибка экспорта",
+                isPresented: Binding(
+                    get: { exportError != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            exportError = nil
+                        }
+                    }
+                )
+            ) {
+                Button("OK", role: .cancel) {
+                    exportError = nil
+                }
+            } message: {
+                Text(exportError ?? "Неизвестная ошибка.")
+            }
+
             .navigationTitle("Дома и абоненты")
             .task {
                 guard !didAttemptLoad else { return }

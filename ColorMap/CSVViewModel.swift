@@ -54,6 +54,52 @@ final class CSVViewModel: ObservableObject {
         }.count
     }
 
+    var apartmentBuildingsCSV: String {
+        let header = [
+            "Коэффициент проникновения, %",
+            "Адрес",
+            "Кол-во квартир",
+            "Кол-во абонентов"
+        ]
+
+        let rows = apartmentBuildings.compactMap { house -> [String]? in
+            guard let apartmentCount = house.apartmentCount,
+                  apartmentCount > 0
+            else {
+                return nil
+            }
+
+            let penetrationPercent =
+                Double(house.subscriberCount) / Double(apartmentCount) * 100
+
+            let formattedPercent = String(
+                format: "%.1f",
+                locale: Locale(identifier: "ru_RU"),
+                penetrationPercent
+            )
+
+            return [
+                formattedPercent,
+                house.address,
+                String(apartmentCount),
+                String(house.subscriberCount)
+            ]
+        }
+
+        let csvRows = [header] + rows
+        let csvText = csvRows
+            .map { row in row.map(escapeCSVField).joined(separator: ";") }
+            .joined(separator: "\r\n")
+
+        // BOM помогает Excel корректно показать кириллицу.
+        return "\u{FEFF}" + csvText
+    }
+
+    private func escapeCSVField(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+        return "\"\(escaped)\""
+    }
+
     func loadCSV(from url: URL) async {
         isLoading = true
         fileError = nil
