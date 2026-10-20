@@ -58,10 +58,9 @@ final class DadataService {
     }
 
     init() {
-        // Только для локального тестирования.
-        // Не коммитьте файл с реальными ключами в репозиторий.
-        token = "c7c97c84f30a47c5aa3d4dd62390093876aa2f5a"
-        secret = "b398cee23c3427b1332fadb7f67c2bb1a7fdf322"
+        // Configure credentials in Xcode Scheme > Run > Environment Variables.
+        token = ProcessInfo.processInfo.environment["DADATA_API_KEY"] ?? ""
+        secret = ProcessInfo.processInfo.environment["DADATA_SECRET_KEY"] ?? ""
 
         if let data = UserDefaults.standard.data(forKey: Self.cacheKey),
            let savedCache = try? JSONDecoder().decode(

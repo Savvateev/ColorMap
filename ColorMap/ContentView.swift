@@ -1,12 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-
 struct ContentView: View {
     @StateObject private var viewModel = CSVViewModel()
     @State private var didAttemptLoad = false
-    @State private var isExportingCSV = false
-    @State private var exportDocument = CSVExportDocument()
+    @State private var isExportingKML = false
+    @State private var kmlDocument = KMLExportDocument()
     @State private var exportError: String?
 
     private let csvURL = URL(
@@ -16,82 +15,78 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             List {
-                Button {
-                    exportDocument = CSVExportDocument(text: viewModel.apartmentBuildingsCSV)
-                    isExportingCSV = true
-                } label: {
-                    Label("Экспорт МКД", systemImage: "square.and.arrow.down")
-                }
-                .disabled(viewModel.isLoading || viewModel.apartmentBuildings.isEmpty)
-
-                Section("Результат") {
-                    Text("Файл: \(viewModel.sourceFileName ?? csvURL.lastPathComponent)")
-                    Text("Абонентских записей: \(viewModel.records.count)")
-                    Text("Многоквартирных домов: \(viewModel.apartmentBuildings.count)")
-                    Text("Жилых домов: \(viewModel.residentialHouseCount)")
-                    //Text("МКД с низким проникновением (менее 1/3): " +
-                    //"\(viewModel.apartmentBuildings.count)")
-                }
-
-                if viewModel.isLoading {
-                    Section {
-                        ProgressView("Запрашиваем DaData…")
-                    }
-                }
-
-                if let apiWarning = viewModel.apiWarning {
-                    Section("Предупреждение") {
-                        Text(apiWarning)
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                if !viewModel.apartmentBuildings.isEmpty {
-                    Section("Многоквартирные дома") {
-                        ForEach(viewModel.apartmentBuildings) { house in
-                            let apartments = house.apartmentCount ?? 0
-                            let penetration = apartments > 0
-                                ? Double(house.subscriberCount) / Double(apartments)
-                                : nil
-
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(house.address)
-                                    .font(.headline)
-
-                                Text("Квартир: \(apartments)")
-                                Text("Абонентов со статусом «обычный»: \(house.subscriberCount)")
-
-                                if let penetration {
-                                    Text(
-                                        "Проникновение: " +
-                                        penetration.formatted(
-                                            .percent.precision(.fractionLength(1))
-                                        )
-                                    )
-                                    .foregroundStyle(.secondary)
-                                } else {
-                                    Text("Проникновение: нет данных о количестве квартир")
-                                        .foregroundStyle(.secondary)
-                                }
+                Section("Карта") {
+                    Button {
+                        Task {
+                            guard let kml = await viewModel.generateKML() else {
+                                exportError = viewModel.mapErrors.joined(separator: "\n\n")
+                                return
                             }
-                            .padding(.vertical, 4)
+                            kmlDocument = KMLExportDocument(text: kml)
+                            isExportingKML = true
+                        }
+                    } label: {
+                        Label("Создать и экспортировать KML", systemImage: "map")
+                    }
+                    .disabled(viewModel.isLoading || viewModel.isGeneratingKML || viewModel.records.isEmpty)
+
+                    if viewModel.isGeneratingKML {
+                        ProgressView("Получаем координаты Яндекс Геокодером…")
+                    }
+
+                    if !viewModel.mapErrors.isEmpty {
+                        Text("Ошибки формирования карты: \(viewModel.mapErrors.count)")
+                            .foregroundStyle(.red)
+                        ForEach(viewModel.mapErrors.indices, id: \.self) { index in
+                            Text(viewModel.mapErrors[index])
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
                         }
                     }
                 }
 
+                Section("Источник") {
+                    Text("Файл: \(viewModel.sourceFileName ?? csvURL.lastPathComponent)")
+                    Text("Прочитано записей: \(viewModel.records.count)")
+                }
+
+                if viewModel.isLoading {
+                    Section {
+                        ProgressView("Обрабатываем адреса DaData…")
+                    }
+                }
+
+                if let apiWarning = viewModel.apiWarning {
+                    Section("Предупреждение DaData") {
+                        Text(apiWarning)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                Section("Проверка адресов DaData") {
+                    Text("Ошибок нормализации: \(viewModel.addressErrors.count)")
+                    ForEach(viewModel.addressErrors.indices, id: \.self) { index in
+                        Text(viewModel.addressErrors[index])
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                }
 
                 if let fileError = viewModel.fileError {
-                    Section("Ошибка") {
+                    Section("Ошибка чтения файла") {
                         Text(fileError)
                             .foregroundStyle(.red)
+                            .textSelection(.enabled)
                     }
                 }
             }
             .fileExporter(
-                isPresented: $isExportingCSV,
-                document: exportDocument,
-                contentType: .commaSeparatedText,
-                defaultFilename: "taiturka_mkd"
+                isPresented: $isExportingKML,
+                document: kmlDocument,
+                contentType: KMLExportDocument.kmlContentType,
+                defaultFilename: "colormap_houses"
             ) { result in
                 if case .failure(let error) = result {
                     exportError = error.localizedDescription
@@ -101,34 +96,17 @@ struct ContentView: View {
                 "Ошибка экспорта",
                 isPresented: Binding(
                     get: { exportError != nil },
-                    set: { isPresented in
-                        if !isPresented {
-                            exportError = nil
-                        }
-                    }
+                    set: { if !$0 { exportError = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) {
-                    exportError = nil
-                }
+                Button("OK", role: .cancel) { exportError = nil }
             } message: {
                 Text(exportError ?? "Неизвестная ошибка.")
             }
-
-            .navigationTitle("Дома и абоненты")
+            .navigationTitle("ColorMap")
             .task {
                 guard !didAttemptLoad else { return }
                 didAttemptLoad = true
-                await viewModel.loadCSV(from: csvURL)
-            }
-            .task {
-                print("DEBUG: ContentView .task запущен")
-                guard !didAttemptLoad else {
-                    print("DEBUG: загрузка пропущена — didAttemptLoad уже true")
-                    return
-                }
-                didAttemptLoad = true
-                print("DEBUG: вызываю loadCSV для \(csvURL.path)")
                 await viewModel.loadCSV(from: csvURL)
             }
         }

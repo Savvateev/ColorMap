@@ -7,27 +7,17 @@ final class CSVViewModel: ObservableObject {
     @Published private(set) var houses: [HouseSummary] = []
     @Published private(set) var sourceFileName: String?
     @Published private(set) var isLoading = false
+    @Published private(set) var isGeneratingKML = false
     @Published private(set) var fileError: String?
     @Published private(set) var apiWarning: String?
+    @Published private(set) var addressErrors: [String] = []
+    @Published private(set) var mapErrors: [String] = []
 
     private let dadataService = DadataService()
+    private let yandexGeocodingService = YandexGeocodingService()
+    private var houseIDByAddressKey: [String: String] = [:]
 
-    var statusCounts: [StatusCount] {
-        Dictionary(grouping: records, by: \.status)
-            .map { status, records in
-                StatusCount(status: status, count: records.count)
-            }
-            .sorted {
-                if $0.count != $1.count {
-                    return $0.count > $1.count
-                }
-
-                return $0.status.localizedCaseInsensitiveCompare($1.status)
-                    == .orderedAscending
-            }
-    }
-
-    /// Все дома, которые DaData определила как многоквартирные.
+    /// All buildings DaData identified as apartment buildings.
     var apartmentBuildings: [HouseSummary] {
         houses
             .filter(\.isApartmentBuilding)
@@ -35,23 +25,6 @@ final class CSVViewModel: ObservableObject {
                 $0.address.localizedCaseInsensitiveCompare($1.address)
                     == .orderedAscending
             }
-    }
-
-    /// Остальные дома, включая дома с неопределённым типом.
-    var residentialHouseCount: Int {
-        houses.filter { !$0.isApartmentBuilding }.count
-    }
-
-    /// Число домов, для которых DaData вернула ровно одну квартиру.
-    var knownOtherHouseCount: Int {
-        houses.filter(\.isKnownNonApartmentBuilding).count
-    }
-
-    /// Число домов, для которых DaData не вернула количество квартир.
-    var unknownHouseCount: Int {
-        houses.filter {
-            !$0.isApartmentBuilding && !$0.isKnownNonApartmentBuilding
-        }.count
     }
 
     var apartmentBuildingsCSV: String {
@@ -71,7 +44,6 @@ final class CSVViewModel: ObservableObject {
 
             let penetrationPercent =
                 Double(house.subscriberCount) / Double(apartmentCount) * 100
-
             let formattedPercent = String(
                 format: "%.1f",
                 locale: Locale(identifier: "ru_RU"),
@@ -88,114 +60,104 @@ final class CSVViewModel: ObservableObject {
 
         let csvRows = [header] + rows
         let csvText = csvRows
-            .map { row in row.map(escapeCSVField).joined(separator: ";") }
+            .map { $0.map(escapeCSVField).joined(separator: ";") }
             .joined(separator: "\r\n")
-
-        // BOM помогает Excel корректно показать кириллицу.
         return "\u{FEFF}" + csvText
     }
 
-    private func escapeCSVField(_ value: String) -> String {
-        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escaped)\""
-    }
-
     func loadCSV(from url: URL) async {
-        print("DEBUG: loadCSV начался")
         isLoading = true
         fileError = nil
         apiWarning = nil
+        addressErrors = []
+        mapErrors = []
         houses = []
-        defer {
-            isLoading = false
-        }
-        do {
-            records = try CSVReader.read(from: url)
-            sourceFileName = url.lastPathComponent
-            print("DEBUG: прочитано записей: \(records.count)")
-            print("DEBUG: обычных абонентов: \(ordinarySubscriberCount(in: records))")
-        } catch {
-            print("DEBUG: ошибка чтения CSV: \(error.localizedDescription)")
-            fileError = error.localizedDescription
-            return
-        }
-        isLoading = true
-        fileError = nil
-        apiWarning = nil
-        houses = []
+        houseIDByAddressKey = [:]
 
-        defer {
-            isLoading = false
-        }
+        defer { isLoading = false }
 
         do {
             records = try CSVReader.read(from: url)
             sourceFileName = url.lastPathComponent
         } catch {
+            records = []
             fileError = error.localizedDescription
             return
         }
 
-        // Группируем абонентские записи по адресу дома — без квартиры.
         let groupedRecords = Dictionary(
             grouping: records.filter { !$0.dadataQuery.isEmpty },
             by: { normalize($0.dadataQuery) }
         )
 
         guard dadataService.isConfigured else {
-            houses = groupedRecords.map { key, clients in
-                HouseSummary(
-                    id: key,
-                    address: clients.first?.dadataQuery ?? key,
-                    apartmentCount: nil,
-                    subscriberCount: ordinarySubscriberCount(in: clients)
+            var summaries: [HouseSummary] = []
+            for (key, clients) in groupedRecords {
+                summaries.append(
+                    HouseSummary(
+                        id: key,
+                        address: clients.first?.dadataQuery ?? key,
+                        apartmentCount: nil,
+                        subscriberCount: ordinarySubscriberCount(in: clients)
+                    )
+                )
+                houseIDByAddressKey[key] = key
+                addressErrors.append(
+                    "\(clients.first?.dadataQuery ?? key) — ключи DaData не настроены; тип дома не определён."
                 )
             }
-
-            apiWarning = """
-            Не заданы ключи DaData. Адреса загружены, но определить тип домов не удалось.
-            """
+            houses = sortedHouses(summaries)
+            apiWarning = "Ключи DaData не настроены. Типы домов не определены."
             return
         }
 
         var summariesByHouseID: [String: HouseSummary] = [:]
-        var failedRequests = 0
 
         for (queryKey, clients) in groupedRecords.sorted(by: { $0.key < $1.key }) {
-            guard let query = clients.first?.dadataQuery else {
-                continue
-            }
-
+            guard let query = clients.first?.dadataQuery else { continue }
             let ordinaryCount = ordinarySubscriberCount(in: clients)
 
             do {
                 let lookup = try await dadataService.lookupHouse(address: query)
+                guard let normalizedAddress = lookup.address?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !normalizedAddress.isEmpty
+                else {
+                    addressErrors.append(
+                        "\(query) — DaData не вернула нормализованный адрес."
+                    )
+                    houseIDByAddressKey[queryKey] = queryKey
+                    summariesByHouseID[queryKey] = HouseSummary(
+                        id: queryKey,
+                        address: query,
+                        apartmentCount: nil,
+                        subscriberCount: ordinaryCount
+                    )
+                    continue
+                }
 
-                // Если DaData вернула ФИАС-ID, используем его для объединения
-                // вариантов записи одного и того же дома.
                 let houseID = lookup.houseFiasId?.lowercased() ?? queryKey
-                let displayAddress = lookup.address ?? query
+                houseIDByAddressKey[queryKey] = houseID
 
                 if var existing = summariesByHouseID[houseID] {
                     existing.subscriberCount += ordinaryCount
-
                     if existing.apartmentCount == nil {
                         existing.apartmentCount = lookup.apartmentCount
                     }
-
                     summariesByHouseID[houseID] = existing
                 } else {
                     summariesByHouseID[houseID] = HouseSummary(
                         id: houseID,
-                        address: displayAddress,
+                        address: normalizedAddress,
                         apartmentCount: lookup.apartmentCount,
                         subscriberCount: ordinaryCount
                     )
                 }
             } catch {
-                failedRequests += 1
-
-                // Сохраняем адрес и число абонентов даже при ошибке DaData.
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                addressErrors.append("\(query) — \(message)")
+                houseIDByAddressKey[queryKey] = queryKey
                 summariesByHouseID[queryKey] = HouseSummary(
                     id: queryKey,
                     address: query,
@@ -205,25 +167,120 @@ final class CSVViewModel: ObservableObject {
             }
         }
 
-        houses = summariesByHouseID.values.sorted {
-            $0.address.localizedCaseInsensitiveCompare($1.address)
-                == .orderedAscending
-        }
-
-        if failedRequests > 0 {
-            apiWarning = """
-            Не удалось получить ответ DaData для \(failedRequests) адресов. \
-            Для них тип дома считается неопределённым.
-            """
+        houses = sortedHouses(Array(summariesByHouseID.values))
+        if !addressErrors.isEmpty {
+            apiWarning = "DaData не смогла определить тип дома для некоторых адресов; ошибки перечислены ниже."
         }
     }
 
+    /// Geocodes each unique house address and returns a KML document.
+    /// Geocoding failures are retained in `mapErrors`; successful placemarks
+    /// are still included in a partial export.
+    func generateKML() async -> String? {
+        mapErrors = []
+        guard dadataService.isConfigured else {
+            mapErrors = ["Не заданы ключи DaData. Без определения типа домов и числа квартир KML не сформирован."]
+            return nil
+        }
+        guard yandexGeocodingService.isConfigured else {
+            mapErrors = ["Не задан ключ YANDEX_GEOCODER_API_KEY. Добавьте его в переменные среды схемы запуска Xcode."]
+            return nil
+        }
+
+        isGeneratingKML = true
+        defer { isGeneratingKML = false }
+
+        let groupedRecords = Dictionary(
+            grouping: records.filter { !$0.dadataQuery.isEmpty },
+            by: { normalize($0.dadataQuery) }
+        )
+        let summariesByID = Dictionary(uniqueKeysWithValues: houses.map { ($0.id, $0) })
+        var placemarks: [KMLPlacemark] = []
+
+        // Residential houses get a status-colored mark for each status present.
+        // Merge source-address variants that DaData resolved to the same FIAS ID.
+        var residentialRecordsByHouseID: [String: [StatusRecord]] = [:]
+        for (addressKey, addressRecords) in groupedRecords {
+            let houseID = houseIDByAddressKey[addressKey] ?? addressKey
+            guard let house = summariesByID[houseID], !house.isApartmentBuilding else {
+                continue
+            }
+            residentialRecordsByHouseID[houseID, default: []].append(contentsOf: addressRecords)
+        }
+
+        for (houseID, addressRecords) in residentialRecordsByHouseID.sorted(by: { $0.key < $1.key }) {
+            guard let house = summariesByID[houseID] else { continue }
+            let address = house.address
+            do {
+                let coordinate = try await yandexGeocodingService.coordinate(for: address)
+                let statusGroups = Dictionary(
+                    grouping: addressRecords,
+                    by: { normalizedStatus($0.status) }
+                )
+
+                for (status, matchingRecords) in statusGroups.sorted(by: { $0.key < $1.key }) {
+                    let displayStatus = matchingRecords.first?.status ?? status
+                    placemarks.append(
+                        KMLPlacemark(
+                            name: address,
+                            address: address,
+                            details: "Жилой дом\nСтатус: \(displayStatus)\nЗаписей со статусом: \(matchingRecords.count)",
+                            styleID: KMLGenerator.styleID(forResidentialStatus: displayStatus),
+                            coordinate: coordinate
+                        )
+                    )
+                }
+            } catch {
+                mapErrors.append("\(address) — \(error.localizedDescription)")
+            }
+        }
+
+        // An apartment building is represented by one larger marker.
+        for house in apartmentBuildings {
+            guard let apartmentCount = house.apartmentCount, apartmentCount > 0 else {
+                mapErrors.append("\(house.address) — DaData не указала количество квартир; МКД пропущен.")
+                continue
+            }
+
+            do {
+                let coordinate = try await yandexGeocodingService.coordinate(for: house.address)
+                let penetration = Double(house.subscriberCount) / Double(apartmentCount) * 100
+                let styleID = KMLGenerator.styleID(forPenetration: penetration)
+                let details = "МКД\nКвартир: \(apartmentCount)\nАбонентов со статусом «обычный»: \(house.subscriberCount)\nПроникновение: \(String(format: "%.1f", penetration))%"
+
+                placemarks.append(
+                    KMLPlacemark(
+                        name: house.address,
+                        address: house.address,
+                        details: details,
+                        styleID: styleID,
+                        coordinate: coordinate
+                    )
+                )
+            } catch {
+                mapErrors.append("\(house.address) — \(error.localizedDescription)")
+            }
+        }
+
+        guard !placemarks.isEmpty else {
+            if mapErrors.isEmpty {
+                mapErrors.append("Нет объектов для создания KML: адреса не распознаны или отсутствуют.")
+            }
+            return nil
+        }
+
+        return KMLGenerator.generate(placemarks: placemarks)
+    }
+
     private func ordinarySubscriberCount(in records: [StatusRecord]) -> Int {
-        records.filter {
-            $0.status
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .localizedCaseInsensitiveCompare("обычный") == .orderedSame
-        }.count
+        records.filter { normalizedStatus($0.status) == "обычный" }.count
+    }
+
+    private func normalizedStatus(_ status: String) -> String {
+        status
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "ё", with: "е")
     }
 
     private func normalize(_ value: String) -> String {
@@ -231,5 +288,16 @@ final class CSVViewModel: ObservableObject {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
             .lowercased()
+    }
+
+    private func sortedHouses(_ values: [HouseSummary]) -> [HouseSummary] {
+        values.sorted {
+            $0.address.localizedCaseInsensitiveCompare($1.address)
+                == .orderedAscending
+        }
+    }
+
+    private func escapeCSVField(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 }
