@@ -49,8 +49,11 @@ final class DadataService {
     private let token: String
     private let secret: String
     private var cache: [String: DadataHouseLookup] = [:]
+    private var cacheFileURL: URL?
 
-    private static let cacheKey = "DadataHouseLookupCache.v1"
+    private static let legacyCacheKey = "DadataHouseLookupCache.v1"
+    private static let cacheDirectoryName = "ColorMap"
+    private static let cacheFileName = "dadata-house-cache.json"
 
     var isConfigured: Bool {
         !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -67,13 +70,7 @@ final class DadataService {
         self.secret = secret
             ?? (savedSecret.isEmpty ? (environment["DADATA_SECRET_KEY"] ?? "") : savedSecret)
 
-        if let data = UserDefaults.standard.data(forKey: Self.cacheKey),
-           let savedCache = try? JSONDecoder().decode(
-               [String: DadataHouseLookup].self,
-               from: data
-           ) {
-            cache = savedCache
-        }
+        loadCacheFromDisk()
     }
 
     func lookupHouse(address: String) async throws -> DadataHouseLookup {
@@ -155,8 +152,13 @@ final class DadataService {
             apartmentCount: apiResult?.houseFlatCount
         )
 
-        cache[cacheID] = lookup
-        saveCache()
+        if let normalizedAddress = lookup.address?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !normalizedAddress.isEmpty {
+            cache[cacheID] = lookup
+            cache[normalize(normalizedAddress)] = lookup
+            saveCache()
+        }
 
         return lookup
     }
@@ -168,12 +170,74 @@ final class DadataService {
             .lowercased()
     }
 
-    private func saveCache() {
-        guard let data = try? JSONEncoder().encode(cache) else {
+    private func loadCacheFromDisk() {
+        guard let directory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
             return
         }
 
-        UserDefaults.standard.set(data, forKey: Self.cacheKey)
+        let cacheDirectory = directory.appendingPathComponent(
+            Self.cacheDirectoryName,
+            isDirectory: true
+        )
+        let fileURL = cacheDirectory.appendingPathComponent(Self.cacheFileName)
+        cacheFileURL = fileURL
+
+        if let data = try? Data(contentsOf: fileURL),
+           let savedCache = try? JSONDecoder().decode(
+               [String: DadataHouseLookup].self,
+               from: data
+           ) {
+            cache = savedCache
+
+            // Merge results that were cached by the previous app version.
+            if let legacyData = UserDefaults.standard.data(forKey: Self.legacyCacheKey),
+               let legacyCache = try? JSONDecoder().decode(
+                   [String: DadataHouseLookup].self,
+                   from: legacyData
+               ) {
+                for (key, value) in legacyCache where cache[key] == nil {
+                    cache[key] = value
+                }
+                saveCache()
+                UserDefaults.standard.removeObject(forKey: Self.legacyCacheKey)
+            }
+            return
+        }
+
+        // Migrate existing results from UserDefaults to the JSON cache file.
+        if let data = UserDefaults.standard.data(forKey: Self.legacyCacheKey),
+           let savedCache = try? JSONDecoder().decode(
+               [String: DadataHouseLookup].self,
+               from: data
+           ) {
+            cache = savedCache
+            saveCache()
+            UserDefaults.standard.removeObject(forKey: Self.legacyCacheKey)
+        }
+    }
+
+    private func saveCache() {
+        guard let cacheFileURL,
+              let data = try? JSONEncoder().encode(cache)
+        else {
+            return
+        }
+
+        do {
+            let directory = cacheFileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            try data.write(to: cacheFileURL, options: .atomic)
+        } catch {
+            #if DEBUG
+            print("DaData: не удалось сохранить локальный кэш: \(error.localizedDescription)")
+            #endif
+        }
     }
 }
 
