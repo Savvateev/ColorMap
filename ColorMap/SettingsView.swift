@@ -110,7 +110,6 @@ struct SettingsView: View {
                     }
                 }
                 .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
                 Button {
