@@ -1,17 +1,14 @@
-//
-//  CSVExportDocument.swift
-//  ColorMap
-//
-//  Created by Pavel Savvateev on 20.10.2026.
-//
-
-
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct CSVExportDocument: FileDocument {
+    static var csvContentType: UTType {
+        UTType(filenameExtension: "csv", conformingTo: .commaSeparatedText)
+            ?? .commaSeparatedText
+    }
+
     static var readableContentTypes: [UTType] {
-        [.commaSeparatedText]
+        [csvContentType, .commaSeparatedText, .plainText]
     }
 
     var text: String
@@ -27,7 +24,6 @@ struct CSVExportDocument: FileDocument {
         else {
             throw CocoaError(.fileReadCorruptFile)
         }
-
         self.text = text
     }
 

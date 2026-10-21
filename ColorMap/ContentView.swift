@@ -6,7 +6,9 @@ struct ContentView: View {
     @State private var selectedCSVURL: URL?
     @State private var isImportingCSV = false
     @State private var isExportingKML = false
+    @State private var isExportingApartmentBuildingsCSV = false
     @State private var kmlDocument = KMLExportDocument()
+    @State private var csvDocument = CSVExportDocument()
     @State private var exportError: String?
     @State private var importError: String?
 
@@ -71,7 +73,20 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Карта") {
+                Section("Экспорт") {
+                    Button {
+                        csvDocument = CSVExportDocument(
+                            text: viewModel.apartmentBuildingsCSV
+                        )
+                        isExportingApartmentBuildingsCSV = true
+                    } label: {
+                        Label("Выгрузить МКД в CSV", systemImage: "tablecells")
+                    }
+                    .disabled(
+                        viewModel.isLoading ||
+                        viewModel.apartmentBuildings.isEmpty
+                    )
+
                     Button {
                         Task {
                             guard let kml = await viewModel.generateKML() else {
@@ -152,6 +167,16 @@ struct ContentView: View {
                     viewModel.clearLoadedData()
                 case .failure(let error):
                     importError = error.localizedDescription
+                }
+            }
+            .fileExporter(
+                isPresented: $isExportingApartmentBuildingsCSV,
+                document: csvDocument,
+                contentType: CSVExportDocument.csvContentType,
+                defaultFilename: "multifamily_houses"
+            ) { result in
+                if case .failure(let error) = result {
+                    exportError = error.localizedDescription
                 }
             }
             .fileExporter(
