@@ -3,14 +3,12 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var viewModel = CSVViewModel()
-    @State private var didAttemptLoad = false
+    @State private var selectedCSVURL: URL?
+    @State private var isImportingCSV = false
     @State private var isExportingKML = false
     @State private var kmlDocument = KMLExportDocument()
     @State private var exportError: String?
-
-    private let csvURL = URL(
-        fileURLWithPath: "/Users/pavelsavvateev/Downloads/taiturka.csv"
-    )
+    @State private var importError: String?
 
     var body: some View {
         TabView {
@@ -22,8 +20,9 @@ struct ContentView: View {
             NavigationStack {
                 SettingsView {
                     viewModel.reloadAPISettings()
+                    guard let selectedCSVURL else { return }
                     Task {
-                        await viewModel.loadCSV(from: csvURL)
+                        await viewModel.loadCSV(from: selectedCSVURL)
                     }
                 }
             }
@@ -36,6 +35,42 @@ struct ContentView: View {
     private var mapTab: some View {
         NavigationStack {
             List {
+                Section("Анализ CSV") {
+                    Button {
+                        isImportingCSV = true
+                    } label: {
+                        Label("Выбрать CSV-файл", systemImage: "doc.badge.plus")
+                    }
+                    .disabled(viewModel.isLoading || viewModel.isGeneratingKML)
+
+                    if let selectedCSVURL {
+                        Label(selectedCSVURL.lastPathComponent, systemImage: "doc.text")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text("Файл не выбран")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        guard let selectedCSVURL else { return }
+                        Task {
+                            await viewModel.loadCSV(from: selectedCSVURL)
+                        }
+                    } label: {
+                        Label("Начать анализ", systemImage: "play.fill")
+                    }
+                    .disabled(
+                        selectedCSVURL == nil ||
+                        viewModel.isLoading ||
+                        viewModel.isGeneratingKML
+                    )
+
+                    if viewModel.isLoading {
+                        ProgressView("Анализируем адреса и данные DaData…")
+                    }
+                }
+
                 Section("Карта") {
                     Button {
                         Task {
@@ -71,14 +106,11 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Источник") {
-                    Text("Файл: \(viewModel.sourceFileName ?? csvURL.lastPathComponent)")
-                    Text("Прочитано записей: \(viewModel.records.count)")
-                }
-
-                if viewModel.isLoading {
-                    Section {
-                        ProgressView("Обрабатываем адреса DaData…")
+                if let sourceFileName = viewModel.sourceFileName {
+                    Section("Результат анализа") {
+                        Text("Файл: \(sourceFileName)")
+                        Text("Прочитано записей: \(viewModel.records.count)")
+                        Text("Уникальных домов: \(viewModel.houses.count)")
                     }
                 }
 
@@ -107,6 +139,21 @@ struct ContentView: View {
                     }
                 }
             }
+            .fileImporter(
+                isPresented: $isImportingCSV,
+                allowedContentTypes: [.commaSeparatedText, .plainText],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    selectedCSVURL = url
+                    importError = nil
+                    viewModel.clearLoadedData()
+                case .failure(let error):
+                    importError = error.localizedDescription
+                }
+            }
             .fileExporter(
                 isPresented: $isExportingKML,
                 document: kmlDocument,
@@ -118,22 +165,25 @@ struct ContentView: View {
                 }
             }
             .alert(
-                "Ошибка экспорта",
+                importError == nil ? "Ошибка экспорта" : "Не удалось выбрать CSV-файл",
                 isPresented: Binding(
-                    get: { exportError != nil },
-                    set: { if !$0 { exportError = nil } }
+                    get: { importError != nil || exportError != nil },
+                    set: {
+                        if !$0 {
+                            importError = nil
+                            exportError = nil
+                        }
+                    }
                 )
             ) {
-                Button("OK", role: .cancel) { exportError = nil }
+                Button("OK", role: .cancel) {
+                    importError = nil
+                    exportError = nil
+                }
             } message: {
-                Text(exportError ?? "Неизвестная ошибка.")
+                Text(importError ?? exportError ?? "Неизвестная ошибка.")
             }
             .navigationTitle("ColorMap")
-            .task {
-                guard !didAttemptLoad else { return }
-                didAttemptLoad = true
-                await viewModel.loadCSV(from: csvURL)
-            }
         }
     }
 }

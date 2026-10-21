@@ -70,6 +70,17 @@ final class CSVViewModel: ObservableObject {
         yandexGeocodingService = YandexGeocodingService()
     }
 
+    func clearLoadedData() {
+        records = []
+        houses = []
+        sourceFileName = nil
+        fileError = nil
+        apiWarning = nil
+        addressErrors = []
+        mapErrors = []
+        houseIDByAddressKey = [:]
+    }
+
     func loadCSV(from url: URL) async {
         isLoading = true
         fileError = nil
