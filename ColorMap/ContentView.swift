@@ -31,6 +31,13 @@ struct ContentView: View {
             .tabItem {
                 Label("Настройки", systemImage: "gearshape")
             }
+
+            NavigationStack {
+                AboutView()
+            }
+            .tabItem {
+                Label("О программе", systemImage: "info.circle")
+            }
         }
     }
 
